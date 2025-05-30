@@ -1,130 +1,246 @@
 import pygame as p
 import ChessEngine
 
-width=height=512
-dimension=8
-sq_size=height//dimension
-max_fps=15
-images={}
+# Constants
+WIDTH = HEIGHT = 512
+DIMENSION = 8
+SQ_SIZE = HEIGHT // DIMENSION
+MAX_FPS = 15
+IMAGES = {}
+MENU_FONT_SIZE = 32
+BUTTON_WIDTH = 200
+BUTTON_HEIGHT = 50
+BUTTON_COLOR = p.Color("darkgray")
+BUTTON_TEXT_COLOR = p.Color("white")
+MENU_TITLE_COLOR = p.Color("black")
 
-def loadImages():
-    pieces=["wp","wR","wN","wB","wK","wQ","bp","bR","bN","bB","bK","bQ"]
+def load_images():
+    """Load images for chess pieces"""
+    pieces = ["wp", "wR", "wN", "wB", "wK", "wQ", "bp", "bR", "bN", "bB", "bK", "bQ"]
     for piece in pieces:
-        images[piece]=p.transform.scale(p.image.load("images/"+piece+".png"),(sq_size,sq_size))
+        try:
+            IMAGES[piece] = p.transform.scale(p.image.load(f"images/{piece}.png"), (SQ_SIZE, SQ_SIZE))
+        except:
+            print(f"Warning: Could not load image for {piece}")
+            # Create a placeholder surface if image loading fails
+            IMAGES[piece] = p.Surface((SQ_SIZE, SQ_SIZE))
+            IMAGES[piece].fill(p.Color('red' if piece[0] == 'w' else 'blue'))
 
+def draw_menu(screen):
+    """Draws the game mode selection menu and returns button rects."""
+    screen.fill(p.Color("lightgray"))
+    font_title = p.font.SysFont("Helvitca", MENU_FONT_SIZE + 10, True, False)
+    title_text = font_title.render("Chess Game - Select Mode", True, MENU_TITLE_COLOR)
+    title_rect = title_text.get_rect(center=(WIDTH / 2, HEIGHT / 4))
+    screen.blit(title_text, title_rect)
+
+    font_button = p.font.SysFont("Helvitca", MENU_FONT_SIZE, True, False)
+    
+    # Player vs Player button
+    pvp_button_rect = p.Rect((WIDTH - BUTTON_WIDTH) / 2, HEIGHT / 2 - BUTTON_HEIGHT - 10, BUTTON_WIDTH, BUTTON_HEIGHT)
+    p.draw.rect(screen, BUTTON_COLOR, pvp_button_rect)
+    pvp_text = font_button.render("Player vs Player", True, BUTTON_TEXT_COLOR)
+    pvp_text_rect = pvp_text.get_rect(center=pvp_button_rect.center)
+    screen.blit(pvp_text, pvp_text_rect)
+
+    # Player vs Computer button
+    pvc_button_rect = p.Rect((WIDTH - BUTTON_WIDTH) / 2, HEIGHT / 2 + 10, BUTTON_WIDTH, BUTTON_HEIGHT)
+    p.draw.rect(screen, BUTTON_COLOR, pvc_button_rect)
+    pvc_text = font_button.render("Player vs Computer", True, BUTTON_TEXT_COLOR)
+    pvc_text_rect = pvc_text.get_rect(center=pvc_button_rect.center)
+    screen.blit(pvc_text, pvc_text_rect)
+    
+    p.display.flip()
+    return pvp_button_rect, pvc_button_rect
 
 def main():
+    """Handles menu and calls the game loop."""
     p.init()
-    screen=p.display.set_mode((width,height))
-    clock=p.time.Clock()
-    screen.fill(p.Color("white"))
-    gs=ChessEngine.GameState()
-    validMoves=gs.getValidMoves()
-    moveMade=False # Flag variable for when a move is made
-    loadImages()
-    running=True
-    sqSelected=() # No square is selected initially, keep track of the last click of the user (tuple: (row,col))
-    playerClicks=[] # Keep track of player clicks (two tuples: [(6,4),(4,4)])
+    screen = p.display.set_mode((WIDTH, HEIGHT))
+    p.display.set_caption("Chess Game")
+    clock = p.time.Clock()
+    load_images()
+
+    game_mode = None
+    menu_active = True
+    pvp_rect, pvc_rect = None, None # Initialize to None
+
+    while menu_active:
+        if pvp_rect is None or pvc_rect is None: # Draw menu only if rects are not set
+             pvp_rect, pvc_rect = draw_menu(screen)
+
+        for e in p.event.get():
+            if e.type == p.QUIT:
+                menu_active = False
+                # Ensure game_mode remains None to exit gracefully
+                game_mode = None 
+            if e.type == p.MOUSEBUTTONDOWN:
+                mouse_pos = e.pos
+                if pvp_rect.collidepoint(mouse_pos):
+                    game_mode = "PvP"
+                    menu_active = False
+                elif pvc_rect.collidepoint(mouse_pos):
+                    game_mode = "PvC"
+                    menu_active = False
+        
+        # Redraw menu only if it hasn't been drawn in this iteration
+        # This check is slightly redundant due to the outer check, but ensures it's drawn if needed.
+        if menu_active and (pvp_rect is None or pvc_rect is None):
+            pvp_rect, pvc_rect = draw_menu(screen)
+        elif menu_active: # Ensure display updates if menu is still active but buttons drawn
+            p.display.flip()
+
+
+        clock.tick(MAX_FPS)
+
+    if game_mode:
+        run_game(screen, clock, game_mode)
+    
+    p.quit()
+
+
+def run_game(screen, clock, game_mode):
+    """Main game loop for the selected mode."""
+    gs = ChessEngine.GameState()
+    valid_moves = gs.getValidMoves()
+    move_made = False
+    
+    running = True
+    sq_selected = ()  # (row, col)
+    player_clicks = []  # [(start_row, start_col), (end_row, end_col)]
+    game_over = False
+    alert_text = ""
+    
     while running:
         for e in p.event.get():
-            if e.type==p.QUIT:
-                running=False
+            if e.type == p.QUIT:
+                running = False
+            
             # Mouse handler
-            elif e.type==p.MOUSEBUTTONDOWN:
-                location=p.mouse.get_pos() # (x,y) location of the mouse
-                col=location[0]//sq_size
-                row=location[1]//sq_size
-                clicked_sq = (row, col)
-
-                if sqSelected == clicked_sq: # User clicked the same square twice
-                    sqSelected=() # Deselect
-                    playerClicks=[] # Clear player clicks
-                else:
-                    # Check if the first click is on a valid piece
-                    if not playerClicks: # First click
-                        piece = gs.board[row][col]
-                        current_player_color = "w" if gs.whiteToMove else "b"
-                        if piece != "--" and piece[0] == current_player_color:
-                            sqSelected = clicked_sq
-                            playerClicks.append(sqSelected)
-                        else: # Clicked on empty or opponent's piece initially
-                            sqSelected = ()
-                            playerClicks = []
-                    else: # Second click
-                        playerClicks.append(clicked_sq)
-
-                if len(playerClicks)==2: # After 2nd click
-                    move=ChessEngine.Move(playerClicks[0],playerClicks[1],gs.board)
-                    # print(move.getChessNotation()) # For debugging
-                    if move in validMoves:
-                        gs.makeMove(move)
-                        moveMade=True
-                        sqSelected=() # Reset user clicks
-                        playerClicks=[]
-                    else: # Invalid move
-                        # If the second click was on another of the player's pieces, select that piece
-                        # Otherwise, keep the first piece selected
-                        second_click_piece = gs.board[playerClicks[1][0]][playerClicks[1][1]]
-                        current_player_color = "w" if gs.whiteToMove else "b"
-                        if second_click_piece != "--" and second_click_piece[0] == current_player_color:
-                            sqSelected = playerClicks[1]
-                            playerClicks = [sqSelected]
-                        else: # Invalid move to an empty square or opponent's piece
-                            sqSelected = playerClicks[0] # Keep the original piece selected
-                            playerClicks = [sqSelected]
+            elif e.type == p.MOUSEBUTTONDOWN:
+                if not game_over:
+                    location = p.mouse.get_pos()  # (x, y)
+                    col = location[0] // SQ_SIZE
+                    row = location[1] // SQ_SIZE
+                    
+                    if sq_selected == (row, col):
+                        sq_selected = ()
+                        player_clicks = []
+                    else:
+                        sq_selected = (row, col)
+                        player_clicks.append(sq_selected)
+                    
+                    if len(player_clicks) == 2:
+                        move = ChessEngine.Move(player_clicks[0], player_clicks[1], gs.board)
+                        print(f"{game_mode}: {move.getChessNotation()}") # Log mode
+                        if move in valid_moves:
+                            gs.makeMove(move)
+                            move_made = True
+                            sq_selected = ()
+                            player_clicks = []
+                            # AI move would go here if game_mode == "PvC" and not gs.whiteToMove (or player is black)
+                        else:
+                            piece = gs.board[row][col]
+                            if piece != "--" and piece[0] == ('w' if gs.whiteToMove else 'b'):
+                                player_clicks = [sq_selected]
+                            else:
+                                player_clicks = []
+            
             # Key handler
-            elif e.type==p.KEYDOWN:
-                if e.key==p.K_z: # Undo when 'z' is pressed
+            elif e.type == p.KEYDOWN:
+                if e.key == p.K_z:  # Undo when 'z' is pressed
                     gs.undoMove()
-                    moveMade=True # To regenerate valid moves and redraw
+                    move_made = True # To recalculate valid moves and redraw
+                    game_over = False # Game might not be over anymore
+                    alert_text = ""
+                elif e.key == p.K_r:  # Reset game when 'r' is pressed
+                    # Reset game state for the current mode
+                    gs = ChessEngine.GameState()
+                    valid_moves = gs.getValidMoves()
+                    sq_selected = ()
+                    player_clicks = []
+                    move_made = False
+                    game_over = False
+                    alert_text = ""
+        
+        if move_made:
+            valid_moves = gs.getValidMoves()
+            move_made = False
+            
+            is_checkmate = getattr(gs, 'checkmate', False)
+            is_stalemate = getattr(gs, 'stalemate', False)
 
-        if moveMade:
-            validMoves=gs.getValidMoves()
-            moveMade=False
+            if is_checkmate:
+                game_over = True
+                if gs.whiteToMove: # If whiteToMove, black made the checkmating move
+                    alert_text = "Black wins by checkmate"
+                else: # If blackToMove, white made the checkmating move
+                    alert_text = "White wins by checkmate"
+            elif is_stalemate:
+                game_over = True
+                alert_text = "Stalemate"
 
-        drawGameState(screen,gs, validMoves, sqSelected)
-        clock.tick(max_fps)
+        draw_game_state(screen, gs, valid_moves, sq_selected, alert_text)
+        clock.tick(MAX_FPS)
         p.display.flip()
 
-# Highlight square selected and moves for piece selected
-def highlightSquares(screen, gs, validMoves, sqSelected):
-    if sqSelected != ():
-        r, c = sqSelected
-        # Highlight selected square
-        s = p.Surface((sq_size, sq_size))
-        s.set_alpha(100) # Transparency value -> 0 transparent, 255 opaque
-        s.fill(p.Color('blue'))
-        screen.blit(s, (c*sq_size, r*sq_size))
-        # Highlight moves from that square
-        s.fill(p.Color('yellow'))
-        piece_color = gs.board[r][c][0]
-        current_turn_color = "w" if gs.whiteToMove else "b"
-        if piece_color == current_turn_color : # Ensure it's the current player's piece
-            for move in validMoves:
-                if move.startRow == r and move.startCol == c:
-                    screen.blit(s, (move.endCol*sq_size, move.endRow*sq_size))
 
-
-def drawGameState(screen,gs, validMoves, sqSelected):
-    drawBoard(screen) # Draw squares on the board
-    highlightSquares(screen, gs, validMoves, sqSelected)
-    drawPieces(screen,gs.board) # Draw pieces on top of squares
-
-# Draw the squares on the board
-def drawBoard(screen):
-    colors=[p.Color("white"),p.Color("gray")]
-    for r in range(dimension):
-        for c in range(dimension):
-            color=colors[((r+c)%2)]
-            p.draw.rect(screen,color,p.Rect(c*sq_size,r*sq_size,sq_size,sq_size))
+def highlight_squares(screen, gs, valid_moves, sq_selected):
+    """Highlight selected square and possible moves"""
+    if sq_selected:
+        r, c = sq_selected
+        piece = gs.board[r][c]
+        if piece != "--" and piece[0] == ('w' if gs.whiteToMove else 'b'):
+            # Highlight selected square
+            s = p.Surface((SQ_SIZE, SQ_SIZE))
+            s.set_alpha(100)  # Transparency
+            s.fill(p.Color('blue'))
+            screen.blit(s, (c * SQ_SIZE, r * SQ_SIZE))
             
-# Draw the pieces on the board using the current GameState.board
-def drawPieces(screen,board):
-    for r in range(dimension): # Corrected iteration order to match board access board[r][c]
-        for c in range(dimension):
-            piece=board[r][c]
-            if piece!="--": # Not empty square
-                screen.blit(images[piece],p.Rect(c*sq_size,r*sq_size,sq_size,sq_size))
+            # Highlight possible moves
+            s.fill(p.Color('green'))
+            for move in valid_moves:
+                if move.startRow == r and move.startCol == c:
+                    # Different color for capture moves
+                    if gs.board[move.endRow][move.endCol] != "--":
+                        s.fill(p.Color('red'))
+                    else:
+                        s.fill(p.Color('green'))
+                    screen.blit(s, (move.endCol * SQ_SIZE, move.endRow * SQ_SIZE))
 
-if __name__=="__main__":
+def draw_game_state(screen, gs, valid_moves, sq_selected, alert_text=""):
+    """Draw the complete game state"""
+    draw_board(screen)
+    highlight_squares(screen, gs, valid_moves, sq_selected)
+    draw_pieces(screen, gs.board)
+    if alert_text:
+        draw_alert_text(screen, alert_text)
+
+def draw_board(screen):
+    """Draw chess board squares"""
+    colors = [p.Color("white"), p.Color("gray")]
+    for r in range(DIMENSION):
+        for c in range(DIMENSION):
+            color = colors[(r + c) % 2]
+            p.draw.rect(screen, color, p.Rect(c * SQ_SIZE, r * SQ_SIZE, SQ_SIZE, SQ_SIZE))
+
+def draw_pieces(screen, board):
+    """Draw chess pieces on board"""
+    for r in range(DIMENSION):
+        for c in range(DIMENSION):
+            piece = board[r][c]
+            if piece != "--":
+                screen.blit(IMAGES[piece], p.Rect(c * SQ_SIZE, r * SQ_SIZE, SQ_SIZE, SQ_SIZE))
+
+def draw_alert_text(screen, text):
+    """Draws alert text like checkmate or stalemate"""
+    font = p.font.SysFont("Helvitca", 32, True, False)
+    text_object = font.render(text, 0, p.Color('Black'))
+    text_location = p.Rect(0, 0, WIDTH, HEIGHT).move(WIDTH / 2 - text_object.get_width() / 2, HEIGHT / 2 - text_object.get_height() / 2)
+    screen.blit(text_object, text_location)
+    text_object = font.render(text, 0, p.Color('Gray')) # Shadow effect
+    screen.blit(text_object, text_location.move(2,2))
+
+
+if __name__ == "__main__":
     main()
